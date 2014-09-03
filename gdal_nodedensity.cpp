@@ -48,6 +48,11 @@
 #include <osmium/geometry/point.hpp>
 #include <osmium/geometry/ogr.hpp>
 
+// data type for the density counters
+typedef unsigned int CounterType;
+// corresponding GDAL data type
+#define CounterTypeGDT GDT_UInt32
+
 /************************************************************************/
 /*                            ArgIsNumeric()                            */
 /************************************************************************/
@@ -79,7 +84,7 @@ static void Usage()
 
 class NodeDensityHandler : public Osmium::Handler::Base {
 
-	std::vector<unsigned char*> m_Data;
+	std::vector<CounterType*> m_Data;
 	int m_xsize;
 	int m_ysize;
 	OGRCoordinateTransformationH m_hCT;
@@ -90,7 +95,7 @@ class NodeDensityHandler : public Osmium::Handler::Base {
 
 public:
 
-	NodeDensityHandler(std::vector<unsigned char*> pData, int xSize, int ySize, OGRCoordinateTransformationH hCT, double *GeoTransform)
+	NodeDensityHandler(std::vector<CounterType*> pData, int xSize, int ySize, OGRCoordinateTransformationH hCT, double *GeoTransform)
 		: Base(),
 			m_GeoTransform(GeoTransform),
 			m_hCT(hCT),
@@ -133,20 +138,19 @@ public:
 
 		for( unsigned int iBand = 0; iBand < m_Data.size(); iBand++ )
 		{
-			if (m_Data[iBand][iLine*m_xsize + iPixel] < 255)
-				m_Data[iBand][iLine*m_xsize + iPixel]++;
+			m_Data[iBand][iLine*m_xsize + iPixel]++;
 		}
 
 		m_count++;
 
 		if ((m_count % 10000) == 0)
 		{
-			fprintf(stderr, "         \r %d/%d nodes...", m_count, m_count_all);
+			fprintf(stderr, "         \r %d/%d nodes (inside/total)...", m_count, m_count_all);
 		}
 	}
 
 	void after_nodes() {
-		fprintf(stderr, "         \rprocessed %d/%d nodes.\n", m_count, m_count_all);
+		fprintf(stderr, "\rprocessed %d/%d nodes.            \n", m_count, m_count_all);
 		throw Osmium::Handler::StopReading();
 	}
 
@@ -162,7 +166,7 @@ class WayDensityHandler : public Osmium::Handler::Base {
 	storage_mmap_t store_neg;
 	cfw_handler_t* handler_cfw;
 
-	std::vector<unsigned char*> m_Data;
+	std::vector<CounterType*> m_Data;
 	int m_xsize;
 	int m_ysize;
 	OGRCoordinateTransformationH m_hCT;
@@ -177,7 +181,7 @@ class WayDensityHandler : public Osmium::Handler::Base {
 
 public:
 
-	WayDensityHandler(std::vector<unsigned char*> pData, int xSize, int ySize, OGRCoordinateTransformationH hCT, double *GeoTransform, double Interval)
+	WayDensityHandler(std::vector<CounterType*> pData, int xSize, int ySize, OGRCoordinateTransformationH hCT, double *GeoTransform, double Interval)
 		: Base(),
 			m_interval(Interval),
 			m_GeoTransform(GeoTransform),
@@ -207,10 +211,15 @@ public:
 	void node(const shared_ptr<Osmium::OSM::Node const>& node) {
 		handler_cfw->node(node);
 		m_count_node++;
+		if ((m_count_node % 10000) == 0)
+		{
+			fprintf(stderr, "         \r %d nodes...", m_count_node);
+		}
 	}
 
 	void after_nodes() {
-		std::cerr << "Memory used for node coordinates storage (approximate):\n  for positive IDs: "
+		fprintf(stderr, "         \rprocessed %d nodes.\n", m_count_node);
+		std::cerr << "\nMemory used for node coordinates storage (approximate):\n  for positive IDs: "
 							<< store_pos.used_memory() / (1024 * 1024)
 							<< " MiB\n  for negative IDs: "
 							<< store_neg.used_memory() / (1024 * 1024)
@@ -274,21 +283,20 @@ public:
 				if (di < 1) di = 1;
 				dsum += di;
 				m_px_count++;
-				if (m_Data[iBand][iLine*m_xsize + iPixel]+di <= 255)
-					m_Data[iBand][iLine*m_xsize + iPixel] += di;
+				m_Data[iBand][iLine*m_xsize + iPixel] += di;
 			}
 
 			m_count++;
 
 			if ((m_count % 10000) == 0)
 			{
-				fprintf(stderr, "         \r %d/%d segments...", m_count, m_count_all);
+				fprintf(stderr, "         \r %d/%d segments (inside/total)...", m_count, m_count_all);
 			}
 		}
 	}
 
 	void after_ways() {
-		fprintf(stderr, "         \rprocessed %d/%d nodes (average %.2f segments).\n", m_count, m_count_all, dsum/m_px_count);
+		fprintf(stderr, "\rprocessed %d/%d nodes (average %.2f segments).      \n", m_count, m_count_all, dsum/m_px_count);
 		throw Osmium::Handler::StopReading();
 	}
 };
@@ -297,7 +305,7 @@ public:
 
 static void ProcessOSM(const char *osm_fnm, GDALDatasetH hDstDS, std::vector<int> anBandList, const double Interval)
 {
-	std::vector<unsigned char*> pData;
+	std::vector<CounterType*> pData;
 	int nXSize, nYSize;
 
 	for( unsigned int iBand = 0; iBand < anBandList.size(); iBand++ )
@@ -307,7 +315,7 @@ static void ProcessOSM(const char *osm_fnm, GDALDatasetH hDstDS, std::vector<int
 		nXSize = GDALGetRasterBandXSize(hBand);
 		nYSize = GDALGetRasterBandYSize(hBand);
 
-		pData.push_back((unsigned char *) CPLMalloc(sizeof(unsigned char)*nXSize*nYSize));
+		pData.push_back((CounterType *) CPLMalloc(sizeof(CounterType)*nXSize*nYSize));
 	}
 
 	OGRSpatialReferenceH hSrcSRS = NULL;
@@ -367,7 +375,22 @@ static void ProcessOSM(const char *osm_fnm, GDALDatasetH hDstDS, std::vector<int
 	for( unsigned int iBand = 0; iBand < anBandList.size(); iBand++ )
 	{
 		GDALRasterBandH hBand = GDALGetRasterBand( hDstDS, iBand+1 );
-		GDALRasterIO(hBand, GF_Write, 0, 0, nXSize, nYSize, pData[iBand], nXSize, nYSize, GDT_Byte, 0, 0);
+		if (GDALGetRasterDataType(hBand) == GDT_Byte)
+		{
+			for (int i = 0; i<nXSize*nYSize; i++)
+			{
+				if (pData[iBand][i] > 255) pData[iBand][i] = 255;
+			}
+		}
+		else if (GDALGetRasterDataType(hBand) == GDT_UInt16)
+		{
+			for (int i = 0; i<nXSize*nYSize; i++)
+			{
+				if (pData[iBand][i] > 65535) pData[iBand][i] = 65535;
+			}
+		}
+
+		GDALRasterIO(hBand, GF_Write, 0, 0, nXSize, nYSize, pData[iBand], nXSize, nYSize, CounterTypeGDT, 0, 0);
 		CPLFree( pData[iBand] );
 	}
 }
